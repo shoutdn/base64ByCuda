@@ -3,9 +3,10 @@
 #include "device_launch_parameters.h"
 
 #include <stdio.h>
+#include <fstream>
 
 cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size);
-cudaError_t decodeWithCuda(const char*src, char*dst , const unsigned int size);
+cudaError_t decodeWithCuda(const char*src, char*dst, const unsigned int src_size, const unsigned int dst_size);
 
 __global__ void addKernel(int *c, const int *a, const int *b)
 {
@@ -23,20 +24,43 @@ __global__ void decodeKernel(const char* src, char* dst,int sum)
 
 int main()
 {
-    const int arraySize = 5;
-    const int a[arraySize] = { 1, 2, 3, 4, 5 };
-    const int b[arraySize] = { 10, 20, 30, 40, 50 };
-    int c[arraySize] = { 0 };
+    std::string file("./base64.data");
+    std::ifstream input(file, std::ios::binary|std::ios::ate);
+    unsigned size = input.tellg();
+    input.seekg(std::ios::beg);
 
-    // Add vectors in parallel.
-    cudaError_t cudaStatus = addWithCuda(c, a, b, arraySize);
+    char* base64 = new char[size];
+    input.read(base64, size);
+    input.close();
+
+
+    int goups = size / 3 + 1;
+
+    char* host_dst = nullptr;
+    cudaError_t cudaStatus = cudaHostAlloc((void**)&host_dst, goups * 4 * sizeof(int), cudaHostAllocDefault);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMalloc failed!");
+    }
+
+
+
+
+    cudaStatus = decodeWithCuda(base64, host_dst, size, goups);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "addWithCuda failed!");
         return 1;
     }
 
-    printf("{1,2,3,4,5} + {10,20,30,40,50} = {%d,%d,%d,%d,%d}\n",
-        c[0], c[1], c[2], c[3], c[4]);
+
+    std::ofstream output("output.jpeg", std::ios::binary);
+    output.write(host_dst, goups);
+    output.close();
+
+
+    free(base64);
+    cudaFreeHost(host_dst);
+
+   
 
     // cudaDeviceReset must be called before exiting in order for profiling and
     // tracing tools such as Nsight and Visual Profiler to show complete traces.
@@ -51,14 +75,13 @@ int main()
 
 
 
-cudaError_t decodeWithCuda(const char* src, char* dst, const unsigned int size)
+cudaError_t decodeWithCuda(const char*& src, char*& dst, const unsigned int src_size,const unsigned int dst_size)
 {
     int* dev_src = 0;
     int* dev_dst = 0;
-    int* host_dst = 0;
     cudaError_t cudaStatus;
 
-    int goups = size / 3 + 1;
+   
 
 
     // Choose which GPU to run on, change this on a multi-GPU system.
@@ -69,17 +92,13 @@ cudaError_t decodeWithCuda(const char* src, char* dst, const unsigned int size)
     }
 
     // Allocate GPU buffers for three vectors (two input, one output)    .
-    cudaStatus = cudaMalloc((void**)&dev_src, size * sizeof(int));
+    cudaStatus = cudaMalloc((void**)&dev_src, src_size * sizeof(int));
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMalloc failed!");
         goto Error;
     }
 
-    cudaStatus = cudaHostAlloc((void**)&host_dst, goups * 4 * sizeof(int), cudaHostAllocDefault);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
+
 
 
     cudaStatus = cudaMalloc((void**)&dev_dst, goups * 4 * sizeof(int));
